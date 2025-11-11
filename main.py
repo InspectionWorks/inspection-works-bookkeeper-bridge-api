@@ -164,3 +164,71 @@ def get_ingest_log():
     with open(LOG_PATH, "r") as f:
         logs = json.load(f)
     return {"entries": logs}
+
+import io, re
+from pdfminer.high_level import extract_text
+
+# -----------------------------------------
+#  PDF Invoice Parser (Manual/Test Mode)
+# -----------------------------------------
+
+AUTO_PARSE_ON_INGEST = False  # 🔁 flip to True later to automate parsing
+
+@app.post("/parse/invoice")
+def parse_invoice(payload: DriveIngestPayload, authorization: Optional[str] = Header(None)):
+    """Manually parse a Spectora invoice PDF and extract structured fields."""
+    _auth(authorization)
+
+    # 1. Download the PDF
+    r = requests.get(str(payload.file_url))
+    r.raise_for_status()
+    tmp_path = "/tmp/tmp_invoice.pdf"
+    with open(tmp_path, "wb") as f:
+        f.write(r.content)
+
+    # 2. Extract all text
+    text = extract_text(tmp_path)
+
+    # 3. Helper to extract text safely
+    def find(pattern):
+        m = re.search(pattern, text, re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    # 4. Parse key fields
+    client = find(r"Bill To\s*([A-Za-z\s']+)")
+    email = find(r"([\w\.-]+@[\w\.-]+)")
+    phone = find(r"(\d{3}[-\s]?\d{3}[-\s]?\d{4})")
+    property_addr = find(r"Property\s*(.+?)\nDate")
+    date = find(r"Date\s*([\d/]+)")
+    order = find(r"Order\s*(\d+)")
+    total = find(r"TOTAL\s*CAD\$\s*([\d,\.]+)")
+    tech_fee = find(r"Technology Fee.*CAD\$\s*([\d,\.]+)")
+    paid = find(r"Paid\s*\(.*\)\s*CAD\$\s*([\d,\.]+)")
+    gst = find(r"GST.*CAD\$\s*([\d,\.]+)")
+
+    # 5. Extract line items (skip tech fee)
+    lines = re.findall(r"([A-Za-z\s]+)\s*CAD\$\s*([\d,\.]+)", text)
+    items = []
+    for desc, amt in lines:
+        desc = desc.strip()
+        if desc.lower().startswith("technology fee"): 
+            continue
+        items.append({"description": desc, "amount": float(amt.replace(',', ''))})
+
+    # 6. Build structured result
+    result = {
+        "client": client,
+        "email": email,
+        "phone": phone,
+        "property": property_addr,
+        "date": date,
+        "order": order,
+        "total": float(total.replace(',', '')) if total else None,
+        "gst": float(gst.replace(',', '')) if gst else None,
+        "technology_fee": float(tech_fee.replace(',', '')) if tech_fee else 0.0,
+        "paid_amount": float(paid.replace(',', '')) if paid else None,
+        "revenue_total": (float(total.replace(',', '')) - float(tech_fee.replace(',', ''))) if total and tech_fee else None,
+        "line_items": items
+    }
+
+    return {"status": "ok", "parsed": result}
