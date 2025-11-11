@@ -144,20 +144,21 @@ def export_close_package(payload: ClosePackagePayload, authorization: Optional[s
     return _relay("close_package", payload.dict())
 
 
+from datetime import datetime
+
 @app.post("/drive/ingest")
 def ingest_drive_file(payload: DriveIngestPayload, authorization: Optional[str] = Header(None)):
     _auth(authorization)
+
+    # Always log ingestion to local file
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "file_url": str(payload.file_url),
         "file_type": payload.file_type,
     }
     _append_ingest_log(entry)
-    @app.post("/drive/ingest")
-def ingest_drive_file(payload: DriveIngestPayload, authorization: Optional[str] = Header(None)):
-    _auth(authorization)
-    
-    # Always log it or relay to Zapier if configured
+
+    # Relay to Zapier if configured
     result = _relay("drive_ingest", payload.dict())
 
     # 🔁 Optional: automatically parse invoices when turned on
@@ -169,6 +170,7 @@ def ingest_drive_file(payload: DriveIngestPayload, authorization: Optional[str] 
             result["auto_parse_error"] = str(e)
 
     return result
+
 
 
 
