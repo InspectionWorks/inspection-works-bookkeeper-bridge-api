@@ -153,7 +153,23 @@ def ingest_drive_file(payload: DriveIngestPayload, authorization: Optional[str] 
         "file_type": payload.file_type,
     }
     _append_ingest_log(entry)
-    return _relay("drive_ingest", payload.dict())
+    @app.post("/drive/ingest")
+def ingest_drive_file(payload: DriveIngestPayload, authorization: Optional[str] = Header(None)):
+    _auth(authorization)
+    
+    # Always log it or relay to Zapier if configured
+    result = _relay("drive_ingest", payload.dict())
+
+    # 🔁 Optional: automatically parse invoices when turned on
+    if AUTO_PARSE_ON_INGEST and payload.file_type == "invoice_pdf":
+        try:
+            parse_result = parse_invoice(payload, authorization)
+            result["auto_parse"] = parse_result["parsed"]
+        except Exception as e:
+            result["auto_parse_error"] = str(e)
+
+    return result
+
 
 
 @app.get("/ingest-log")
@@ -169,7 +185,7 @@ import io, re
 from pdfminer.high_level import extract_text
 
 # -----------------------------------------
-#  PDF Invoice Parser (Manual/Test Mode)
+#  PDF Invoice Parser (Manual/Auto Mode)
 # -----------------------------------------
 
 AUTO_PARSE_ON_INGEST = False  # 🔁 flip to True later to automate parsing
